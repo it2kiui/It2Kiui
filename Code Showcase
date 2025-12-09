@@ -1,0 +1,240 @@
+--// This is my A* pathfinding system
+
+-------------------------------------------------
+--- The Main Script
+-------------------------------------------------
+
+local PartsFolder = workspace["A*"].Parts
+local PathFindModule = require(script.PathFindingModule)
+
+local TotalParts = #PartsFolder:GetChildren()
+local GridSize = math.sqrt(TotalParts)
+
+local StartPoint = PartsFolder:FindFirstChild("Tile_2_1")
+local EndPoint = PartsFolder:FindFirstChild("Tile_20_21")
+
+
+local Obj = PathFindModule.new(StartPoint, EndPoint, GridSize, PartsFolder)
+Obj:PathFind()
+
+-------------------------------------------------
+--- The Module Script
+-------------------------------------------------
+
+--// Its OOP script
+
+local Service = {}
+Service.__index = Service
+
+function Service.new(StartPoint, EndPoint, GridSize, PartsFolder)
+	local self = setmetatable({}, Service)
+	
+	self.StartPoint = StartPoint
+	self.EndPoint = EndPoint
+	self.LastPart = StartPoint
+	self.GridSize = GridSize
+	self.PartsFolder = PartsFolder
+	self.Opened = {}
+	self.Closed = {}
+	
+	return self
+end
+
+function Service:BuildUp(CentrePart)
+	local Neighbors = self:getNeighbors(CentrePart, false)
+	for _, Table in Neighbors do
+		local Part = Table.part
+
+		local parentG = CentrePart:GetAttribute("GCost") or 0
+		local stepCost = (Part.Position - CentrePart.Position).Magnitude
+		local newG = parentG + stepCost
+		local h = (Part.Position - self.EndPoint.Position).Magnitude
+		local f = newG + h
+
+		if not Part:GetAttribute("GCost") or newG < Part:GetAttribute("GCost") then
+			Part:SetAttribute("GCost", newG)
+			Part:SetAttribute("HCost", h)
+			Part:SetAttribute("FCost", f)
+			Part:SetAttribute("Parent", CentrePart.Name)
+		end
+
+		if not self.Opened[Part] and not self.Closed[Part] then
+			Part.Color = Color3.new(0, 1, 0)
+			self.Opened[Part] = true
+		end
+	end
+
+	-- Build open list
+	local OpenList = {}
+	for part, _ in self.Opened do
+		table.insert(OpenList, { part = part })
+	end
+
+	-- Pick the next lowest FCost
+	local LowestPart = self:GetLowestFCost(OpenList)
+	if not LowestPart then
+		warn("No valid lowest FCost found — stopping.")
+		return false
+	end
+
+	LowestPart.Color = Color3.new(1, 0, 0)
+	self.Opened[LowestPart] = nil
+	self.Closed[LowestPart] = true
+
+	self.LastPart = LowestPart
+	return true
+end
+
+function Service:getGridPosition(part : Instance, origin : Vector3, tileSize : Vector3)
+	local offset = part.Position - Vector3.new(-25, 5, -25)
+
+	local col = math.round(offset.X / tileSize.X) + 1
+	local row = math.round(offset.Z / tileSize.Z) + 1
+
+	return row, col
+end
+
+function Service:getNeighbors(Part: Instance, IncludeDiagonals: boolean)
+	local row, col = self:getGridPosition(Part, Vector3.new(-25, 5, -25), Vector3.new(2.5, 1, 2.5))
+	local neighbors = {}
+
+	for dRow = -1, 1 do
+		for dCol = -1, 1 do
+			if not (dRow == 0 and dCol == 0) then
+				if IncludeDiagonals or (dRow == 0 or dCol == 0) then
+					local newRow = row + dRow
+					local newCol = col + dCol
+					
+					-- Check if the neighbor is within bounds and not a wall
+					if newRow >= 1 and newRow <= self.GridSize and newCol >= 1 and newCol <= self.GridSize then
+						local neighborPart = self:GetPartFromRowAndCol(newRow, newCol, Part.Parent)
+
+						if neighborPart and neighborPart.Color ~= Color3.new(0, 0, 0) then
+							-- Skip if it's already opened or closed
+							if not self:IsInList(neighborPart, self.Opened) and not self:IsInList(neighborPart, self.Closed) then
+								table.insert(neighbors, {
+									row = newRow,
+									col = newCol,
+									part = neighborPart,
+								})
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+
+	return neighbors
+end
+
+
+function Service:GetPartFromRowAndCol(Row : number, Col : number)
+	for _, part in self.PartsFolder:GetChildren() do
+		local partRow, partCol = self:getGridPosition(part, Vector3.new(-25, 5, -25), Vector3.new(2.5, 1, 2.5))
+		if partRow == Row and partCol == Col then
+			return part
+		end
+	end
+	return nil
+end
+
+function Service:GetLowestFCost(Table)
+	local lowestFCost = math.huge
+	local lowestHCost = math.huge
+	local lowestPart = nil
+
+	for _, SmallTable in Table do
+		local part = SmallTable.part
+		if part then
+			local fCost = part:GetAttribute("FCost")
+			local hCost = part:GetAttribute("HCost")
+
+			if typeof(fCost) == "number" then
+				if fCost < lowestFCost or (fCost == lowestFCost and hCost < lowestHCost) then
+					lowestFCost = fCost
+					lowestHCost = hCost
+					lowestPart = part
+				end
+			end
+		end
+	end
+
+	return lowestPart
+end
+
+
+function Service:IsInList(part: Instance, list: { [Instance]: boolean }?)
+	if not list then
+		return false
+	end
+	return list[part] == true
+end
+
+function Service:PathFind()
+	-- Reset old data
+	for _, p in self.PartsFolder:GetChildren() do
+		p:SetAttribute("GCost", nil)
+		p:SetAttribute("HCost", nil)
+		p:SetAttribute("FCost", nil)
+		p:SetAttribute("Parent", nil)
+		if p.Color ~= Color3.new(0, 0, 0) then
+			p.Color = Color3.new(1, 1, 1)
+		end
+		self.Opened = {}
+		self.Closed = {}
+		self.LastPart = self.StartPoint
+	end
+
+	self.StartPoint.Color = Color3.new(0.15, 0.35, 1)
+	self.EndPoint.Color = Color3.new(0.15, 0.35, 1)
+
+	-- Main loop
+	print("Finding path...")
+
+	while self.LastPart ~= self.EndPoint do
+		local success = self:BuildUp(self.LastPart)
+		if not success then
+			warn("Pathfinding failed or stuck.")
+			break
+		end
+		task.wait(0.05)
+	end
+
+	print("Path found! Backtracking...")
+
+	-- Backtrack path
+	local Path = {}
+	local Current = self.EndPoint
+	while Current and Current ~= self.StartPoint do
+		table.insert(Path, Current)
+		local parentName = Current:GetAttribute("Parent")
+		if not parentName then
+			warn("Parent missing for", Current.Name)
+			break
+		end
+		Current = self.PartsFolder:FindFirstChild(parentName)
+	end
+	table.insert(Path, self.StartPoint)
+
+	-- Reset grid visuals
+	for _, v in self.PartsFolder:GetChildren() do
+		if v.Color ~= Color3.new(0, 0, 0) then
+			v.Color = Color3.new(1, 1, 1)
+		end
+	end
+
+	-- Visualize shortest path
+	for i = #Path, 1, -1 do
+		local part = Path[i]
+		part.Color = Color3.new(1, 1, 0) -- Yellow for final path
+		task.wait(0.05)
+	end
+
+	print("Done!")
+end
+
+
+return Service
+
+--// Here is a video for the show case : https://youtu.be/BonzwU42xKQ
